@@ -1,2 +1,547 @@
 # AuraConv
 Convolution Filter
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>AuraConv - Convolution Filter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            overflow-x: hidden;
+            touch-action: manipulation;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-top: 20px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 200;
+            letter-spacing: -0.05em;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 0.9rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .visualizer {
+            width: 100%;
+            height: 200px;
+            background: linear-gradient(180deg, #111 0%, #0a0a0a 100%);
+            border-radius: 20px;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 30px;
+            border: 1px solid #222;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .status-indicator {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #333;
+            transition: background 0.3s;
+        }
+
+        .status-indicator.active {
+            background: #10b981;
+            box-shadow: 0 0 10px #10b981;
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .control-group {
+            background: #111;
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid #222;
+        }
+
+        .control-label {
+            font-size: 0.85rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .interval-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        button {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 15px;
+            border-radius: 12px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+            touch-action: manipulation;
+        }
+
+        button:hover {
+            background: #222;
+            border-color: #444;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        button.selected {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-color: transparent;
+            color: white;
+        }
+
+        button.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 20px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            margin-top: 10px;
+        }
+
+        button.primary:active {
+            transform: scale(0.98);
+            opacity: 0.9;
+        }
+
+        button.primary.stop {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .slider-container {
+            margin-top: 10px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: #222;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(102, 126, 234, 0.4);
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 10px rgba(102, 126, 234, 0.4);
+        }
+
+        .value-display {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 1.2rem;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .info {
+            text-align: center;
+            color: #555;
+            font-size: 0.8rem;
+            margin-top: 20px;
+            line-height: 1.5;
+        }
+
+        .warning {
+            background: rgba(245, 87, 108, 0.1);
+            border: 1px solid rgba(245, 87, 108, 0.3);
+            color: #f5576c;
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .warning.show {
+            display: block;
+        }
+
+        @media (max-width: 380px) {
+            h1 { font-size: 2rem; }
+            .interval-buttons { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AuraConv</h1>
+            <div class="subtitle">Convolution Filter</div>
+        </header>
+
+        <div class="warning" id="warning">
+            Please allow microphone access to use this app.
+        </div>
+
+        <div class="visualizer">
+            <canvas id="canvas"></canvas>
+            <div class="status-indicator" id="status"></div>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label class="control-label">Block Interval (samples)</label>
+                <div class="interval-buttons">
+                    <button class="interval-btn selected" data-value="50">50</button>
+                    <button class="interval-btn" data-value="100">100</button>
+                    <button class="interval-btn" data-value="200">200</button>
+                    <button class="interval-btn" data-value="500">500</button>
+                    <button class="interval-btn" data-value="1000">1k</button>
+                    <button class="interval-btn" data-value="2000">2k</button>
+                </div>
+                
+                <div class="slider-container">
+                    <label class="control-label" style="margin-top: 20px;">Block Duration: <span id="durationValue">50</span>%</label>
+                    <input type="range" id="durationSlider" min="10" max="90" value="50">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Convolution Reverb</label>
+                <div class="slider-container">
+                    <label class="control-label">Decay Time</label>
+                    <input type="range" id="decaySlider" min="1" max="10" value="3" step="0.1">
+                </div>
+            </div>
+
+            <button class="primary" id="toggleBtn">Start Microphone</button>
+
+            <div class="info">
+                AuraConv blocks audio at specified sample intervals then applies convolution reverb.<br>
+                Best experienced with headphones.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let audioContext = null;
+        let mediaStream = null;
+        let isRunning = false;
+        let blockInterval = 50;
+        let blockDuration = 0.5;
+        let decayTime = 3;
+        let scriptNode = null;
+        let convolver = null;
+        let gainNode = null;
+        let analyser = null;
+        let sampleCounter = 0;
+
+        const canvas = document.getElementById('canvas');
+        const canvasCtx = canvas.getContext('2d');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const statusIndicator = document.getElementById('status');
+        const warning = document.getElementById('warning');
+        const durationSlider = document.getElementById('durationSlider');
+        const durationValue = document.getElementById('durationValue');
+        const decaySlider = document.getElementById('decaySlider');
+
+        // Resize canvas
+        function resizeCanvas() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Create impulse response for convolution
+        function createImpulseResponse(duration) {
+            const sampleRate = audioContext.sampleRate;
+            const length = sampleRate * duration;
+            const impulse = audioContext.createBuffer(2, length, sampleRate);
+            
+            for (let channel = 0; channel < 2; channel++) {
+                const channelData = impulse.getChannelData(channel);
+                for (let i = 0; i < length; i++) {
+                    // Exponential decay noise
+                    const noise = Math.random() * 2 - 1;
+                    channelData[i] = noise * Math.pow(1 - i / length, 2);
+                }
+            }
+            return impulse;
+        }
+
+        // Audio processing
+        function setupAudioProcessing() {
+            const bufferSize = 4096;
+            scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
+            
+            scriptNode.onaudioprocess = function(e) {
+                const inputData = e.inputBuffer.getChannelData(0);
+                const outputData = e.outputBuffer.getChannelData(0);
+                const bufferLength = inputData.length;
+                
+                for (let i = 0; i < bufferLength; i++) {
+                    sampleCounter++;
+                    
+                    // Check if we should block this sample
+                    const positionInInterval = sampleCounter % blockInterval;
+                    const blockLength = Math.floor(blockInterval * blockDuration);
+                    const shouldBlock = positionInInterval < blockLength;
+                    
+                    if (shouldBlock) {
+                        outputData[i] = 0;
+                    } else {
+                        outputData[i] = inputData[i];
+                    }
+                }
+            };
+        }
+
+        // Visualization
+        function visualize() {
+            if (!isRunning) return;
+            
+            requestAnimationFrame(visualize);
+            
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+            
+            canvasCtx.fillStyle = '#111';
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            const barWidth = (canvas.width / bufferLength) * 2.5;
+            let barHeight;
+            let x = 0;
+            
+            for(let i = 0; i < bufferLength; i++) {
+                barHeight = dataArray[i] / 255 * canvas.height;
+                
+                const gradient = canvasCtx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+                gradient.addColorStop(0, '#667eea');
+                gradient.addColorStop(1, '#764ba2');
+                
+                canvasCtx.fillStyle = gradient;
+                canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                
+                x += barWidth + 1;
+            }
+        }
+
+        // Start/Stop
+        async function toggleAudio() {
+            if (isRunning) {
+                stopAudio();
+            } else {
+                await startAudio();
+            }
+        }
+
+        async function startAudio() {
+            try {
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+                
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                });
+                
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                
+                // Create nodes
+                convolver = audioContext.createConvolver();
+                convolver.buffer = createImpulseResponse(decayTime);
+                
+                gainNode = audioContext.createGain();
+                gainNode.gain.value = 0.8;
+                
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                
+                setupAudioProcessing();
+                
+                // Chain: Source -> ScriptProcessor (blocking) -> Convolver -> Gain -> Analyser -> Destination
+                source.connect(scriptNode);
+                scriptNode.connect(convolver);
+                convolver.connect(gainNode);
+                gainNode.connect(analyser);
+                analyser.connect(audioContext.destination);
+                
+                isRunning = true;
+                toggleBtn.textContent = 'Stop Microphone';
+                toggleBtn.classList.add('stop');
+                statusIndicator.classList.add('active');
+                warning.classList.remove('show');
+                
+                visualize();
+                
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                warning.classList.add('show');
+                warning.textContent = 'Error accessing microphone: ' + err.message;
+            }
+        }
+
+        function stopAudio() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            
+            if (scriptNode) {
+                scriptNode.disconnect();
+                scriptNode = null;
+            }
+            
+            if (convolver) {
+                convolver.disconnect();
+                convolver = null;
+            }
+            
+            if (gainNode) {
+                gainNode.disconnect();
+                gainNode = null;
+            }
+            
+            isRunning = false;
+            toggleBtn.textContent = 'Start Microphone';
+            toggleBtn.classList.remove('stop');
+            statusIndicator.classList.remove('active');
+            sampleCounter = 0;
+            
+            // Clear canvas
+            canvasCtx.fillStyle = '#111';
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // Event listeners
+        toggleBtn.addEventListener('click', toggleAudio);
+
+        // Interval buttons
+        document.querySelectorAll('.interval-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.interval-btn').forEach(b => b.classList.remove('selected'));
+                e.target.classList.add('selected');
+                blockInterval = parseInt(e.target.dataset.value);
+            });
+        });
+
+        // Duration slider
+        durationSlider.addEventListener('input', (e) => {
+            blockDuration = parseInt(e.target.value) / 100;
+            durationValue.textContent = e.target.value;
+        });
+
+        // Decay slider
+        decaySlider.addEventListener('input', (e) => {
+            decayTime = parseFloat(e.target.value);
+            if (isRunning && convolver) {
+                convolver.buffer = createImpulseResponse(decayTime);
+            }
+        });
+
+        // Handle visibility change
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && isRunning) {
+                // Optional: Pause processing when hidden to save battery
+            }
+        });
+    </script>
+</body>
+</html>
+```
+
+AuraConv is a single-file, mobile-optimized web app designed for Cloudflare Pages. 
+
+Key Features:
+- Interval Blocking: Blocks every N samples (50, 100, 200, etc.) creating rhythmic gaps in the live microphone input
+- Convolution Reverb: Applies a generated reverb tail to the blocked signal for ambient textures
+- Real-time Visualization: Spectrum analyzer showing the processed audio output
+- Mobile-First: Touch-optimized controls, responsive layout, and viewport-locked scaling
+- Single File: Everything inline (HTML, CSS, JS) - just upload to Cloudflare Pages
+
+How it works:
+1. Grants microphone access
+2. Processes audio through ScriptProcessorNode to zero-out samples at specified intervals (creating the "blocked" effect)
+3. Passes through ConvolverNode with a generated impulse response for the reverb effect
+4. Visualizes the output in real-time
+
+The "taps" control lets you select how frequently audio is blocked (every 50, 100, 200+ samples), while the duration slider controls how long each block lasts (percentage of the interval).

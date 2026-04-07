@@ -165,6 +165,40 @@
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
         }
 
+        button.toggle-btn {
+            width: 100%;
+            padding: 18px;
+            margin-top: 15px;
+            border: 1px solid #444;
+            background: transparent;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button.toggle-btn.active {
+            background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
+            border-color: transparent;
+            color: white;
+        }
+
+        button.toggle-btn::before {
+            content: '';
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #444;
+            transition: background 0.2s;
+        }
+
+        button.toggle-btn.active::before {
+            background: rgba(255,255,255,0.9);
+            box-shadow: 0 0 8px rgba(255,255,255,0.5);
+        }
+
         .slider-container {
             margin-top: 10px;
         }
@@ -231,6 +265,23 @@
             display: block;
         }
 
+        .mode-indicator {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            background: #0a0a0a;
+            margin-bottom: 15px;
+            font-size: 0.85rem;
+            color: #666;
+            border: 1px solid #222;
+        }
+
+        .mode-indicator.inverted {
+            color: #f5576c;
+            border-color: #f5576c;
+            background: rgba(245, 87, 108, 0.05);
+        }
+
         @media (max-width: 380px) {
             h1 { font-size: 2rem; }
             .interval-buttons { grid-template-columns: 1fr 1fr; }
@@ -272,6 +323,23 @@
             </div>
 
             <div class="control-group">
+                <div class="mode-indicator" id="modeIndicator">
+                    Mode: Block Intervals (Silence Gaps)
+                </div>
+                
+                <button class="toggle-btn" id="invertPolarityBtn">
+                    Invert Blocking Polarity
+                </button>
+                
+                <div style="margin-top: 15px; padding: 12px; background: #0a0a0a; border-radius: 8px; border: 1px solid #222;">
+                    <p style="font-size: 0.8rem; color: #666; line-height: 1.4;">
+                        <strong style="color: #888;">OFF:</strong> Block out intervals (normal gaps)<br>
+                        <strong style="color: #f5576c;">ON:</strong> Pass only intervals (chopped bursts)
+                    </p>
+                </div>
+            </div>
+
+            <div class="control-group">
                 <label class="control-label">Convolution Reverb</label>
                 <div class="slider-container">
                     <label class="control-label">Decay Time</label>
@@ -295,6 +363,7 @@
         let blockInterval = 50;
         let blockDuration = 0.5;
         let decayTime = 3;
+        let invertPolarity = false;
         let scriptNode = null;
         let convolver = null;
         let gainNode = null;
@@ -309,6 +378,8 @@
         const durationSlider = document.getElementById('durationSlider');
         const durationValue = document.getElementById('durationValue');
         const decaySlider = document.getElementById('decaySlider');
+        const invertPolarityBtn = document.getElementById('invertPolarityBtn');
+        const modeIndicator = document.getElementById('modeIndicator');
 
         // Resize canvas
         function resizeCanvas() {
@@ -327,7 +398,6 @@
             for (let channel = 0; channel < 2; channel++) {
                 const channelData = impulse.getChannelData(channel);
                 for (let i = 0; i < length; i++) {
-                    // Exponential decay noise
                     const noise = Math.random() * 2 - 1;
                     channelData[i] = noise * Math.pow(1 - i / length, 2);
                 }
@@ -348,12 +418,23 @@
                 for (let i = 0; i < bufferLength; i++) {
                     sampleCounter++;
                     
-                    // Check if we should block this sample
                     const positionInInterval = sampleCounter % blockInterval;
                     const blockLength = Math.floor(blockInterval * blockDuration);
-                    const shouldBlock = positionInInterval < blockLength;
+                    const isInBlockZone = positionInInterval < blockLength;
                     
-                    if (shouldBlock) {
+                    // Polarity inversion logic:
+                    // Normal (false): Block the intervals (isInBlockZone = silence)
+                    // Inverted (true): Only pass the intervals (isInBlockZone = sound)
+                    let shouldMute;
+                    if (invertPolarity) {
+                        // Inverted: mute when NOT in block zone (only pass intervals)
+                        shouldMute = !isInBlockZone;
+                    } else {
+                        // Normal: mute when IN block zone (block intervals)
+                        shouldMute = isInBlockZone;
+                    }
+                    
+                    if (shouldMute) {
                         outputData[i] = 0;
                     } else {
                         outputData[i] = inputData[i];
@@ -383,8 +464,13 @@
                 barHeight = dataArray[i] / 255 * canvas.height;
                 
                 const gradient = canvasCtx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
-                gradient.addColorStop(0, '#667eea');
-                gradient.addColorStop(1, '#764ba2');
+                if (invertPolarity) {
+                    gradient.addColorStop(0, '#f5576c');
+                    gradient.addColorStop(1, '#f093fb');
+                } else {
+                    gradient.addColorStop(0, '#667eea');
+                    gradient.addColorStop(1, '#764ba2');
+                }
                 
                 canvasCtx.fillStyle = gradient;
                 canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
@@ -422,7 +508,6 @@
                 
                 const source = audioContext.createMediaStreamSource(mediaStream);
                 
-                // Create nodes
                 convolver = audioContext.createConvolver();
                 convolver.buffer = createImpulseResponse(decayTime);
                 
@@ -434,7 +519,6 @@
                 
                 setupAudioProcessing();
                 
-                // Chain: Source -> ScriptProcessor (blocking) -> Convolver -> Gain -> Analyser -> Destination
                 source.connect(scriptNode);
                 scriptNode.connect(convolver);
                 convolver.connect(gainNode);
@@ -483,7 +567,6 @@
             statusIndicator.classList.remove('active');
             sampleCounter = 0;
             
-            // Clear canvas
             canvasCtx.fillStyle = '#111';
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
         }
@@ -491,7 +574,6 @@
         // Event listeners
         toggleBtn.addEventListener('click', toggleAudio);
 
-        // Interval buttons
         document.querySelectorAll('.interval-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('.interval-btn').forEach(b => b.classList.remove('selected'));
@@ -500,13 +582,11 @@
             });
         });
 
-        // Duration slider
         durationSlider.addEventListener('input', (e) => {
             blockDuration = parseInt(e.target.value) / 100;
             durationValue.textContent = e.target.value;
         });
 
-        // Decay slider
         decaySlider.addEventListener('input', (e) => {
             decayTime = parseFloat(e.target.value);
             if (isRunning && convolver) {
@@ -514,10 +594,21 @@
             }
         });
 
-        // Handle visibility change
+        invertPolarityBtn.addEventListener('click', () => {
+            invertPolarity = !invertPolarity;
+            invertPolarityBtn.classList.toggle('active');
+            
+            if (invertPolarity) {
+                modeIndicator.textContent = 'Mode: Pass Intervals (Chopped Bursts)';
+                modeIndicator.classList.add('inverted');
+            } else {
+                modeIndicator.textContent = 'Mode: Block Intervals (Silence Gaps)';
+                modeIndicator.classList.remove('inverted');
+            }
+        });
+
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && isRunning) {
-                // Optional: Pause processing when hidden to save battery
             }
         });
     </script>

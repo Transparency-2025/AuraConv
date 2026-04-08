@@ -118,6 +118,12 @@
             gap: 10px;
         }
 
+        .source-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
         button {
             background: #1a1a1a;
             border: 1px solid #333;
@@ -176,7 +182,7 @@
         }
 
         button.toggle-btn.active {
-            background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
             border-color: transparent;
             color: white;
         }
@@ -282,6 +288,45 @@
             background: rgba(245, 87, 108, 0.05);
         }
 
+        .mode-indicator.rotating {
+            color: #10b981;
+            border-color: #10b981;
+            background: rgba(16, 185, 129, 0.05);
+        }
+
+        .rotation-visual {
+            width: 60px;
+            height: 60px;
+            margin: 15px auto;
+            position: relative;
+            border: 2px solid #333;
+            border-radius: 50%;
+            display: none;
+        }
+
+        .rotation-visual.active {
+            display: block;
+        }
+
+        .rotation-dot {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #10b981;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            margin-left: -5px;
+            margin-top: -25px;
+            transform-origin: 50% 25px;
+            box-shadow: 0 0 10px #10b981;
+        }
+
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
         @media (max-width: 380px) {
             h1 { font-size: 2rem; }
             .interval-buttons { grid-template-columns: 1fr 1fr; }
@@ -305,6 +350,14 @@
         </div>
 
         <div class="controls">
+            <div class="control-group">
+                <label class="control-label">Audio Source</label>
+                <div class="source-buttons">
+                    <button class="source-btn selected" data-source="mic">Microphone</button>
+                    <button class="source-btn" data-source="noise">White Noise</button>
+                </div>
+            </div>
+
             <div class="control-group">
                 <label class="control-label">Block Interval (samples)</label>
                 <div class="interval-buttons">
@@ -340,6 +393,25 @@
             </div>
 
             <div class="control-group">
+                <label class="control-label">Circular Rotation (3D Spatial)</label>
+                <button class="toggle-btn" id="rotationBtn">
+                    Enable Rotation
+                </button>
+                
+                <div class="rotation-visual" id="rotationVisual">
+                    <div class="rotation-dot" id="rotationDot"></div>
+                </div>
+                
+                <div class="slider-container" style="margin-top: 15px; opacity: 0.5; pointer-events: none;" id="rateContainer">
+                    <label class="control-label">Rotation Rate (Hz): <span id="rateValue">0.5</span> Hz</label>
+                    <input type="range" id="rateSlider" min="0.1" max="2.0" value="0.5" step="0.1">
+                    <p style="font-size: 0.75rem; color: #555; margin-top: 8px; text-align: center;">
+                        Headphones recommended for full 3D effect
+                    </p>
+                </div>
+            </div>
+
+            <div class="control-group">
                 <label class="control-label">Convolution Reverb</label>
                 <div class="slider-container">
                     <label class="control-label">Decay Time</label>
@@ -347,10 +419,10 @@
                 </div>
             </div>
 
-            <button class="primary" id="toggleBtn">Start Microphone</button>
+            <button class="primary" id="toggleBtn">Start Audio</button>
 
             <div class="info">
-                AuraConv blocks audio at specified sample intervals then applies convolution reverb.<br>
+                AuraConv processes audio with interval blocking, spatial rotation, and convolution reverb.<br>
                 Best experienced with headphones.
             </div>
         </div>
@@ -364,11 +436,19 @@
         let blockDuration = 0.5;
         let decayTime = 3;
         let invertPolarity = false;
+        let sourceType = 'mic'; // 'mic' or 'noise'
+        let noiseNode = null;
         let scriptNode = null;
         let convolver = null;
         let gainNode = null;
         let analyser = null;
+        let pannerNode = null;
         let sampleCounter = 0;
+        
+        // Rotation variables
+        let rotationEnabled = false;
+        let rotationRate = 0.5; // Hz
+        let rotationStartTime = 0;
 
         const canvas = document.getElementById('canvas');
         const canvasCtx = canvas.getContext('2d');
@@ -380,6 +460,12 @@
         const decaySlider = document.getElementById('decaySlider');
         const invertPolarityBtn = document.getElementById('invertPolarityBtn');
         const modeIndicator = document.getElementById('modeIndicator');
+        const rotationBtn = document.getElementById('rotationBtn');
+        const rateSlider = document.getElementById('rateSlider');
+        const rateValue = document.getElementById('rateValue');
+        const rateContainer = document.getElementById('rateContainer');
+        const rotationVisual = document.getElementById('rotationVisual');
+        const rotationDot = document.getElementById('rotationDot');
 
         // Resize canvas
         function resizeCanvas() {
@@ -388,6 +474,17 @@
         }
         resizeCanvas();
         window.addEventListener('resize', resizeCanvas);
+
+        // Create white noise buffer
+        function createNoiseBuffer() {
+            const bufferSize = audioContext.sampleRate * 2; // 2 seconds of noise
+            const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                data[i] = Math.random() * 2 - 1;
+            }
+            return buffer;
+        }
 
         // Create impulse response for convolution
         function createImpulseResponse(duration) {
@@ -403,6 +500,35 @@
                 }
             }
             return impulse;
+        }
+
+        // Setup audio source (mic or noise)
+        function setupSource() {
+            if (sourceType === 'mic') {
+                return navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                }).then(stream => {
+                    mediaStream = stream;
+                    return audioContext.createMediaStreamSource(stream);
+                });
+            } else {
+                // White noise source
+                return new Promise((resolve) => {
+                    noiseNode = audioContext.createBufferSource();
+                    noiseNode.buffer = createNoiseBuffer();
+                    noiseNode.loop = true;
+                    noiseNode.start(0);
+                    // Create a gain node to control noise volume
+                    const noiseGain = audioContext.createGain();
+                    noiseGain.gain.value = 0.5; // Lower volume for comfort
+                    noiseNode.connect(noiseGain);
+                    resolve(noiseGain);
+                });
+            }
         }
 
         // Audio processing
@@ -422,15 +548,10 @@
                     const blockLength = Math.floor(blockInterval * blockDuration);
                     const isInBlockZone = positionInInterval < blockLength;
                     
-                    // Polarity inversion logic:
-                    // Normal (false): Block the intervals (isInBlockZone = silence)
-                    // Inverted (true): Only pass the intervals (isInBlockZone = sound)
                     let shouldMute;
                     if (invertPolarity) {
-                        // Inverted: mute when NOT in block zone (only pass intervals)
                         shouldMute = !isInBlockZone;
                     } else {
-                        // Normal: mute when IN block zone (block intervals)
                         shouldMute = isInBlockZone;
                     }
                     
@@ -443,11 +564,55 @@
             };
         }
 
+        // Setup spatial rotation
+        function setupRotation() {
+            if (!rotationEnabled) return null;
+            
+            pannerNode = audioContext.createPanner();
+            pannerNode.panningModel = 'HRTF';
+            pannerNode.distanceModel = 'inverse';
+            pannerNode.refDistance = 1;
+            pannerNode.maxDistance = 100;
+            pannerNode.rolloffFactor = 1;
+            pannerNode.coneInnerAngle = 360;
+            pannerNode.coneOuterAngle = 0;
+            pannerNode.coneOuterGain = 0;
+            
+            // Start at front
+            pannerNode.positionX.value = 0;
+            pannerNode.positionY.value = 0;
+            pannerNode.positionZ.value = 2;
+            
+            rotationStartTime = audioContext.currentTime;
+            
+            return pannerNode;
+        }
+
+        // Update rotation position
+        function updateRotation() {
+            if (!rotationEnabled || !pannerNode || !isRunning) return;
+            
+            const elapsed = audioContext.currentTime - rotationStartTime;
+            const angle = 2 * Math.PI * rotationRate * elapsed;
+            
+            // Circular motion around listener head (radius = 2)
+            const x = Math.sin(angle) * 2; // Left-right
+            const z = Math.cos(angle) * 2; // Front-back
+            
+            pannerNode.positionX.setValueAtTime(x, audioContext.currentTime);
+            pannerNode.positionZ.setValueAtTime(z, audioContext.currentTime);
+            
+            // Update visual indicator
+            const degrees = (angle * 180 / Math.PI) % 360;
+            rotationDot.style.transform = `rotate(${degrees}deg)`;
+        }
+
         // Visualization
         function visualize() {
             if (!isRunning) return;
             
             requestAnimationFrame(visualize);
+            updateRotation();
             
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
@@ -467,6 +632,9 @@
                 if (invertPolarity) {
                     gradient.addColorStop(0, '#f5576c');
                     gradient.addColorStop(1, '#f093fb');
+                } else if (rotationEnabled) {
+                    gradient.addColorStop(0, '#10b981');
+                    gradient.addColorStop(1, '#059669');
                 } else {
                     gradient.addColorStop(0, '#667eea');
                     gradient.addColorStop(1, '#764ba2');
@@ -498,15 +666,7 @@
                     await audioContext.resume();
                 }
                 
-                mediaStream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: {
-                        echoCancellation: false,
-                        noiseSuppression: false,
-                        autoGainControl: false
-                    }
-                });
-                
-                const source = audioContext.createMediaStreamSource(mediaStream);
+                const source = await setupSource();
                 
                 convolver = audioContext.createConvolver();
                 convolver.buffer = createImpulseResponse(decayTime);
@@ -519,14 +679,24 @@
                 
                 setupAudioProcessing();
                 
+                const panner = setupRotation();
+                
+                // Chain: Source -> ScriptProcessor -> [Panner] -> Convolver -> Gain -> Analyser -> Destination
                 source.connect(scriptNode);
-                scriptNode.connect(convolver);
+                
+                if (panner) {
+                    scriptNode.connect(panner);
+                    panner.connect(convolver);
+                } else {
+                    scriptNode.connect(convolver);
+                }
+                
                 convolver.connect(gainNode);
                 gainNode.connect(analyser);
                 analyser.connect(audioContext.destination);
                 
                 isRunning = true;
-                toggleBtn.textContent = 'Stop Microphone';
+                toggleBtn.textContent = 'Stop Audio';
                 toggleBtn.classList.add('stop');
                 statusIndicator.classList.add('active');
                 warning.classList.remove('show');
@@ -534,9 +704,9 @@
                 visualize();
                 
             } catch (err) {
-                console.error('Error accessing microphone:', err);
+                console.error('Error:', err);
                 warning.classList.add('show');
-                warning.textContent = 'Error accessing microphone: ' + err.message;
+                warning.textContent = 'Error: ' + err.message;
             }
         }
 
@@ -544,6 +714,12 @@
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => track.stop());
                 mediaStream = null;
+            }
+            
+            if (noiseNode) {
+                noiseNode.stop();
+                noiseNode.disconnect();
+                noiseNode = null;
             }
             
             if (scriptNode) {
@@ -561,8 +737,13 @@
                 gainNode = null;
             }
             
+            if (pannerNode) {
+                pannerNode.disconnect();
+                pannerNode = null;
+            }
+            
             isRunning = false;
-            toggleBtn.textContent = 'Start Microphone';
+            toggleBtn.textContent = 'Start Audio';
             toggleBtn.classList.remove('stop');
             statusIndicator.classList.remove('active');
             sampleCounter = 0;
@@ -573,6 +754,18 @@
 
         // Event listeners
         toggleBtn.addEventListener('click', toggleAudio);
+
+        // Source selection
+        document.querySelectorAll('.source-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (isRunning) {
+                    stopAudio();
+                }
+                document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('selected'));
+                e.target.classList.add('selected');
+                sourceType = e.target.dataset.source;
+            });
+        });
 
         document.querySelectorAll('.interval-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -607,9 +800,40 @@
             }
         });
 
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden && isRunning) {
+        // Rotation controls
+        rotationBtn.addEventListener('click', () => {
+            rotationEnabled = !rotationEnabled;
+            rotationBtn.classList.toggle('active');
+            
+            if (rotationEnabled) {
+                rateContainer.style.opacity = '1';
+                rateContainer.style.pointerEvents = 'auto';
+                rotationVisual.classList.add('active');
+                rotationDot.style.animation = `rotate ${1/rotationRate}s linear infinite`;
+            } else {
+                rateContainer.style.opacity = '0.5';
+                rateContainer.style.pointerEvents = 'none';
+                rotationVisual.classList.remove('active');
+                rotationDot.style.animation = 'none';
             }
+            
+            if (isRunning) {
+                // Restart to apply changes
+                stopAudio();
+                setTimeout(() => startAudio(), 100);
+            }
+        });
+
+        rateSlider.addEventListener('input', (e) => {
+            rotationRate = parseFloat(e.target.value);
+            rateValue.textContent = rotationRate.toFixed(1);
+            if (rotationEnabled && rotationDot) {
+                rotationDot.style.animation = `rotate ${1/rotationRate}s linear infinite`;
+            }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            // Handle tab switching if needed
         });
     </script>
 </body>

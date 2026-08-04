@@ -1,0 +1,160 @@
+desc: AuraConv Pro - Dynamic Lo-Fi & Convolution Filter
+
+slider1:100<1,20000,1>Filter Length (Taps)
+slider2:0<-60,12,0.1>Output Gain (dB)
+slider3:10<1,1000,1>Block Width (Samples)
+slider4:100<0,100,1>Dry/Wet Mix (%)
+slider5:0<0,1,1{Sample & Hold (Blocky), Linear Ramp (Smooth)}>Mode
+slider6:0<0,180,1>Stereo Phase Offset (Deg)
+
+@init
+MAX_BUF = 20000;
+buf_l = freembuf();
+buf_r = buf_l + MAX_BUF;
+
+buf_pos = 0;
+sum_l = 0;
+sum_r = 0;
+
+block_cnt_l = 0;
+block_cnt_r = 0;
+
+target_out_l = 0;
+target_out_r = 0;
+prev_out_l = 0;
+prev_out_r = 0;
+
+curr_out_l = 0;
+curr_out_r = 0;
+
+// Parameter smoothing variables
+smooth_gain = 1;
+
+@slider
+// Safe dynamic size update without clearing history
+new_size = min(max(slider1, 1), MAX_BUF);
+new_size != size ? (
+  size = new_size;
+  // Recalculate sum over current buffer history to prevent clicks & floating-point errors
+  sum_l = 0;
+  sum_r = 0;
+  i = 0;
+  loop(size,
+    idx = (buf_pos - 1 - i + MAX_BUF) % MAX_BUF;
+    sum_l += buf_l[idx];
+    sum_r += buf_r[idx];
+    i += 1;
+  );
+);
+
+target_gain = 10 ^ (slider2 / 20);
+block_size = slider3;
+wet_mix = slider4 / 100;
+dry_mix = 1 - wet_mix;
+mode = slider5;
+
+// Compute right channel sample offset from phase angle (0-180 deg)
+phase_offset = floor((slider6 / 360) * block_size);
+
+@sample
+// Parameter Smoothing for Gain (10ms coefficient at typical sample rates)
+smooth_gain += (target_gain - smooth_gain) * 0.005;
+
+// Store dry inputs
+dry_l = spl0;
+dry_r = spl1;
+
+// --- Moving Average Running Calculation ---
+sum_l -= buf_l[buf_pos];
+sum_r -= buf_r[buf_pos];
+
+buf_l[buf_pos] = dry_l;
+buf_r[buf_pos] = dry_r;
+
+sum_l += dry_l;
+sum_r += dry_r;
+
+buf_pos += 1;
+buf_pos >= size ? buf_pos = 0;
+
+// Floating-point denormal / drift protection
+abs(sum_l) < 0.000000001 ? sum_l = 0;
+abs(sum_r) < 0.000000001 ? sum_r = 0;
+
+// Calculate instantaneous moving average
+avg_l = (sum_l / size);
+avg_r = (sum_r / size);
+
+// --- Left Channel Block Processing ---
+block_cnt_l += 1;
+block_cnt_l >= block_size ? (
+  block_cnt_l = 0;
+  prev_out_l = target_out_l;
+  target_out_l = avg_l;
+);
+
+// --- Right Channel Block Processing (With Phase Offset) ---
+block_cnt_r += 1;
+(block_cnt_r + phase_offset) >= block_size ? (
+  block_cnt_r = 0;
+  prev_out_r = target_out_r;
+  target_out_r = avg_r;
+);
+
+// --- Mode Selection (Sample-and-Hold vs. Linear Ramp) ---
+mode == 0 ? (
+  // Mode 0: Sample & Hold (Blocky Staircase)
+  curr_out_l = target_out_l;
+  curr_out_r = target_out_r;
+) : (
+  // Mode 1: Linear Ramp (Smooth Glissando)
+  fract_l = block_cnt_l / block_size;
+  fract_r = block_cnt_r / block_size;
+  curr_out_l = prev_out_l + (target_out_l - prev_out_l) * fract_l;
+  curr_out_r = prev_out_r + (target_out_r - prev_out_r) * fract_r;
+);
+
+// --- Output Assembly (Gain & Dry/Wet Mix) ---
+wet_l = curr_out_l * smooth_gain;
+wet_r = curr_out_r * smooth_gain;
+
+spl0 = (dry_l * dry_mix) + (wet_l * wet_mix);
+spl1 = (dry_r * dry_mix) + (wet_r * wet_mix);
+
+@gfx 300 120
+// Dark background
+gfx_r = 0.08; gfx_g = 0.09; gfx_b = 0.11; gfx_a = 1;
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+// Title & Info Header
+gfx_r = 0.4; gfx_g = 0.8; gfx_b = 1.0; gfx_a = 1;
+gfx_x = 10; gfx_y = 10;
+gfx_drawstr("AURA CONV PRO ");
+gfx_r = 0.6; gfx_g = 0.6; gfx_b = 0.6;
+gfx_drawstr(mode == 0 ? "[Sample & Hold]" : "[Linear Ramp]");
+
+// Visualiser Box
+v_x = 10; v_y = 35;
+v_w = gfx_w - 20; v_h = gfx_h - 45;
+
+gfx_r = 0.15; gfx_g = 0.18; gfx_b = 0.22;
+gfx_rect(v_x, v_y, v_w, v_h);
+
+// Centerline
+gfx_r = 0.3; gfx_g = 0.3; gfx_b = 0.3;
+gfx_line(v_x, v_y + v_h*0.5, v_x + v_w, v_y + v_h*0.5);
+
+// Draw Block Size Indicator Bar
+bar_w = (block_size / 1000) * v_w;
+gfx_r = 0.2; gfx_g = 0.6; gfx_b = 0.9; gfx_a = 0.3;
+gfx_rect(v_x, v_y, min(bar_w, v_w), v_h);
+
+// Draw Live Signal Level Meters
+meter_l = min(abs(spl0), 1.0) * (v_h * 0.5);
+meter_r = min(abs(spl1), 1.0) * (v_h * 0.5);
+
+gfx_r = 0.0; gfx_g = 1.0; gfx_b = 0.6; gfx_a = 0.8;
+gfx_rect(v_x + 5, v_y + v_h*0.5 - meter_l, 6, meter_l * 2);
+
+gfx_r = 1.0; gfx_g = 0.4; gfx_b = 0.2; gfx_a = 0.8;
+gfx_rect(v_x + 15, v_y + v_h*0.5 - meter_r, 6, meter_r * 2);

@@ -1,0 +1,233 @@
+desc: AuraConv Master Edition - Dynamic Lo-Fi, Modulation & Filter Engine
+
+slider1:100<1,20000,1>Filter Length (Taps)
+slider2:0<-60,12,0.1>Output Gain (dB)
+slider3:0<0,1,1{Manual (Samples), Tempo Sync (Beats)}>Block Width Mode
+slider4:10<1,1000,1>Manual Block Width (Samples)
+slider5:3<0,12,1{1/64, 1/32, 1/16, 1/8, 1/4, 1/2, 1 Bar, 1/16T, 1/8T, 1/4T, 1/16D, 1/8D, 1/4D}>Sync Rate
+slider6:100<0,100,1>Dry/Wet Mix (%)
+slider7:0<0,1,1{Sample & Hold (Blocky), Linear Ramp (Smooth)}>Stepping Mode
+slider8:0<0,180,1>Stereo Phase Offset (Deg)
+slider9:20000<200,20000,10>Post-Filter Tone / LPF (Hz)
+slider10:0<0,100,1>Tape Warmth Saturation (%)
+slider11:0<0,10,0.01>LFO Speed (Hz)
+slider12:0<0,100,1>LFO Depth to Filter Length (%)
+
+@init
+MAX_BUF = 20000;
+buf_l = freembuf();
+buf_r = buf_l + MAX_BUF;
+
+// Zero out buffers to prevent startup burst artifacts
+memset(buf_l, 0, MAX_BUF * 2);
+
+buf_pos = 0;
+sum_l = 0;
+sum_r = 0;
+
+block_cnt = 0;
+target_out_l = 0; target_out_r = 0;
+prev_out_l = 0;   prev_out_r = 0;
+curr_out_l = 0;   curr_out_r = 0;
+
+smooth_gain = 1;
+lpf_l = 0; lpf_r = 0;
+lfo_phase = 0;
+
+// Scope visualizer buffer
+scope_buf = buf_r + MAX_BUF;
+memset(scope_buf, 0, 300);
+scope_pos = 0;
+
+@slider
+// Sample-rate independent smoothing coefficient (10ms)
+smooth_coeff = 1 - exp(-1 / (0.01 * srate));
+
+// Safe dynamic size update without memory overflow bug
+base_size = min(max(slider1, 1), MAX_BUF);
+
+target_gain = 10 ^ (slider2 / 20);
+wet_mix = slider6 / 100;
+dry_mix = 1 - wet_mix;
+stepping_mode = slider7;
+sat_amount = slider10 / 100;
+
+// Low-Pass Filter Alpha (1-pole Butterworth approximation)
+cutoff = min(slider9, srate * 0.49);
+lpf_alpha = 1 - exp(-2 * $pi * cutoff / srate);
+
+@sample
+// --- LFO Calculation ---
+slider11 > 0 ? (
+  lfo_phase += (2 * $pi * slider11) / srate;
+  lfo_phase >= 2 * $pi ? lfo_phase -= 2 * $pi;
+  lfo_val = (sin(lfo_phase) + 1) * 0.5; // 0 to 1
+) : lfo_val = 0;
+
+// Modulate size with LFO
+mod_size = floor(base_size + (lfo_val * (slider12 / 100) * (MAX_BUF - base_size)));
+mod_size = min(max(mod_size, 1), MAX_BUF);
+
+// Recalculate sum if size changes dynamically
+mod_size != size ? (
+  size = mod_size;
+  sum_l = 0; sum_r = 0;
+  i = 0;
+  loop(size,
+    // Safe double MAX_BUF offset prevents negative array index
+    idx = (buf_pos - 1 - i + MAX_BUF * 2) % MAX_BUF;
+    sum_l += buf_l[idx];
+    sum_r += buf_r[idx];
+    i += 1;
+  );
+);
+
+// --- Determine Effective Block Width (Samples vs Tempo Sync) ---
+slider3 == 0 ? (
+  eff_block_size = max(1, slider4);
+) : (
+  // Tempo Sync Calculations
+  bpm = tempo > 0 ? tempo : 120;
+  quarter_samples = (60 / bpm) * srate;
+  
+  rate_sel = slider5;
+  mult = 1.0;
+  rate_sel == 0 ? mult = 0.0625; // 1/64
+  rate_sel == 1 ? mult = 0.125;  // 1/32
+  rate_sel == 2 ? mult = 0.25;   // 1/16
+  rate_sel == 3 ? mult = 0.5;    // 1/8
+  rate_sel == 4 ? mult = 1.0;    // 1/4
+  rate_sel == 5 ? mult = 2.0;    // 1/2
+  rate_sel == 6 ? mult = 4.0;    // 1 Bar
+  rate_sel == 7 ? mult = 0.16666667; // 1/16T
+  rate_sel == 8 ? mult = 0.33333333; // 1/8T
+  rate_sel == 9 ? mult = 0.66666667; // 1/4T
+  rate_sel == 10 ? mult = 0.375;     // 1/16D
+  rate_sel == 11 ? mult = 0.75;      // 1/8D
+  rate_sel == 12 ? mult = 1.5;       // 1/4D
+
+  eff_block_size = max(1, floor(quarter_samples * mult));
+);
+
+// --- Parameter Smoothing ---
+smooth_gain += (target_gain - smooth_gain) * smooth_coeff;
+
+dry_l = spl0;
+dry_r = spl1;
+
+// --- Moving Average Calculation ---
+sum_l -= buf_l[buf_pos];
+sum_r -= buf_r[buf_pos];
+
+buf_l[buf_pos] = dry_l;
+buf_r[buf_pos] = dry_r;
+
+sum_l += dry_l;
+sum_r += dry_r;
+
+buf_pos += 1;
+buf_pos >= size ? buf_pos = 0;
+
+// Floating-point denormal & drift protection
+abs(sum_l) < 0.000000001 ? sum_l = 0;
+abs(sum_r) < 0.000000001 ? sum_r = 0;
+
+avg_l = sum_l / size;
+avg_r = sum_r / size;
+
+// --- Corrected Stereo Phase Block Triggering ---
+block_cnt += 1;
+block_cnt >= eff_block_size ? block_cnt = 0;
+
+// Left channel updates at counter 0
+block_cnt == 0 ? (
+  prev_out_l = target_out_l;
+  target_out_l = avg_l;
+);
+
+// Right channel updates at phase-offset counter
+phase_sample_offset = floor((slider8 / 360) * eff_block_size);
+block_cnt == (phase_sample_offset % eff_block_size) ? (
+  prev_out_r = target_out_r;
+  target_out_r = avg_r;
+);
+
+// --- Stepping Mode Selection ---
+stepping_mode == 0 ? (
+  curr_out_l = target_out_l;
+  curr_out_r = target_out_r;
+) : (
+  fract = block_cnt / eff_block_size;
+  curr_out_l = prev_out_l + (target_out_l - prev_out_l) * fract;
+  curr_out_r = prev_out_r + (target_out_r - prev_out_r) * fract;
+);
+
+// --- Post-Filtering (LPF Tone Control) ---
+lpf_l += lpf_alpha * (curr_out_l - lpf_l);
+lpf_r += lpf_alpha * (curr_out_r - lpf_r);
+
+// --- Tape Saturation (ArcTan Soft-Clipping) ---
+sat_amount > 0 ? (
+  drive = 1 + (sat_amount * 3);
+  sat_l = atan(lpf_l * drive) / drive; // FIXED: 'atan' instead of 'invatan'
+  sat_r = atan(lpf_r * drive) / drive; // FIXED: 'atan' instead of 'invatan'
+) : (
+  sat_l = lpf_l;
+  sat_r = lpf_r;
+);
+
+// --- Final Output Mix & Assembly ---
+wet_l = sat_l * smooth_gain;
+wet_r = sat_r * smooth_gain;
+
+spl0 = (dry_l * dry_mix) + (wet_l * wet_mix);
+spl1 = (dry_r * dry_mix) + (wet_r * wet_mix);
+
+// Feed oscilloscope display buffer
+scope_pos += 1;
+scope_pos >= 300 ? scope_pos = 0;
+scope_buf[scope_pos] = (spl0 + spl1) * 0.5;
+
+@gfx 360 140
+// Background
+gfx_r = 0.06; gfx_g = 0.07; gfx_b = 0.09; gfx_a = 1;
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+// Header Title
+gfx_r = 0.3; gfx_g = 0.75; gfx_b = 1.0; gfx_a = 1;
+gfx_x = 12; gfx_y = 10;
+gfx_drawstr("AURA CONV MASTER");
+
+gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.5;
+gfx_x = 160; gfx_y = 10;
+gfx_drawstr(slider3 == 0 ? "[Manual Width]" : "[Tempo Sync]");
+
+// Oscilloscope Screen Frame
+o_x = 10; o_y = 32; o_w = gfx_w - 20; o_h = gfx_h - 42;
+gfx_r = 0.12; gfx_g = 0.14; gfx_b = 0.18;
+gfx_rect(o_x, o_y, o_w, o_h);
+
+// Grid lines
+gfx_r = 0.18; gfx_g = 0.22; gfx_b = 0.28;
+gfx_line(o_x, o_y + o_h*0.5, o_x + o_w, o_y + o_h*0.5);
+
+// Render Real-Time Oscilloscope Waveform
+gfx_r = 0.0; gfx_g = 0.9; gfx_b = 0.7; gfx_a = 0.9;
+px = o_x;
+py = o_y + o_h*0.5;
+i = 0;
+loop(min(o_w, 300),
+  s_idx = (scope_pos + i) % 300;
+  val = scope_buf[s_idx];
+  ny = o_y + (o_h * 0.5) - (val * (o_h * 0.45));
+  gfx_line(px, py, o_x + i, ny);
+  px = o_x + i;
+  py = ny;
+  i += 1;
+);
+
+// LFO Indicator Bar (If Active)
+slider11 > 0 ? (
+  gfx_r = 1.0; gfx_g = 0.4; gfx_b = 0.2; gfx_a = 0.8;
+  gfx_rect(o_x + 2, o_y + 2, lfo_val * (o_w - 4), 3);
+);
